@@ -3,5 +3,9 @@
   "version": "0.0.1",
   "main": "index.js",
   "author": "vdorchan <vdorchan@gmail.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vdorchan/pc-www1.git"
+  }
 }
