@@ -1,117 +1,120 @@
-const request = require('request')
-const http = require('http')
-const https = require('https')
-const path = require('path')
 const fs = require('fs')
 const url = require('url')
-const qs = require('querystring')
+const querystring = require('querystring')
+const got = require('got')
+const FormData = require('form-data')
 
 const CONFIG = {
   site: '',
-  // test
   username: '',
   password: '',
-  recordList: `http://cms.${this.site}.com.cn:8080/${this.site}/Enq`
+  recordList: `http://cms.${this.site}.com.cn:8080/${this.site}/Enq`,
+  uploadBaseUrl: ''
 }
 
-const isLeagelSite = site => ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse'].indexOf(CONFIG.site) !== -1
+const isLeagelSite = site => ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse'].indexOf(site) !== -1
 
-exports.verifyUser = function (opts) {
-  return new Promise(async function (resolve, reject) {
-    Object.assign(CONFIG, opts)
+let uploadClient = got.extend({})
 
-    if (!isLeagelSite(CONFIG.site)) {
-      return reject(new Error('Illegal site!'))
-    }
-
-    const postContent = qs.stringify({
-      app: 'upload_' + CONFIG.site,
-      return: `http://cms.${CONFIG.site}.com.cn:8080/${CONFIG.site}/Security?dispatch =login`,
-      // "return": 'http://cms.pconline.com.cn:8080/pconline/login.jsp',
-      username: CONFIG.username,
-      password: CONFIG.password
+exports.init = function ({ site }) {
+  if (!isLeagelSite(site)) {
+    throw new Error('Illegal site!')
+  } else {
+    Object.assign(CONFIG, {
+      site,
+      uploadBaseUrl: `http://cms.${site}.com.cn:8080/${site}`
     })
 
-    const headers = {
-      Accept: 'text/html,application/xhtml+xml,application/xmlq=0.9,image/webp,*/*q=0.8',
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Origin: `http://cms.${CONFIG.site}.com.cn:8080`,
-      Referer: `http://cms.${CONFIG.site}.com.cn:8080/${CONFIG.site}/Security?dispatch=login`,
-      // 'Referer':'http://cms.pconline.com.cn:8080/pconline/login.jsp',
-      'Upgrade-Insecure-Requests': '1',
-      'User-Agent': 'Mozilla/5.0 (Macintosh Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.104 Safari/537.36',
-      'Content-Length': postContent.length
+    uploadClient = got.extend({
+      baseUrl: CONFIG.uploadBaseUrl
+    })
+  }
+}
+
+const verifyUser = function (user) {
+  return new Promise(async function (resolve, reject) {
+    if (!isLeagelSite(CONFIG.site)) {
+      return reject(new Error('Unable to get site, please use init first!'))
     }
 
-    const options = {
-      hostname: 'auth.pconline.com.cn',
-      port: 443,
-      path: '/security-server/auth.do',
-      method: 'POST',
-      headers: headers,
-      rejectUnauthorized: false,
-      requestCert: true
+    Object.assign(CONFIG, user)
+
+    const postContent = {
+      app: 'upload_' + CONFIG.site,
+      return: `${CONFIG.uploadBaseUrl}/Security?dispatch=login`,
+      username: CONFIG.username,
+      password: CONFIG.password
     }
 
-    const form = `http://cms.${CONFIG.site}.com.cn:8080/${CONFIG.site}/Security?dispatch=login`
+    const getSession = async location => {
+      let sessionRes
+      try {
+        sessionRes = await got.post(location)
+      } catch (err) {
+        sessionRes = err
+      }
 
-    const getSession = function (resolve, reject) {
-      return new Promise(function (resolve, reject) {
-        const req = http.get(form, function (res) {
-          var session = res.headers['set-cookie'][0]
-          session = session.split(';')[0]
-          if (session) {
-            resolve(session)
-          } else {
-            reject(new Error('no session'))
-          }
-        })
-        req.end()
-      })
+      return sessionRes.headers['set-cookie'][0].match(/JSESSIONID=\S+;/g)[0].replace(';', '')
     }
+
     console.log('验证用户...')
 
-    try {
-      const session = await getSession()
-      options.headers.cookie = session
-      const req = https
-        .request(options, function (res) {
-          if (!res.headers.location) {
-            reject(new Error('账号不正常，请确认账号能否正常使用！'))
-            return false
-          }
+    let authRes
+    let session
 
-          var _url = url.parse(res.headers.location)
-          var tmp = url.parse(_url).query
-          var _res = qs.parse(tmp)
-          if (parseInt(_res.st) === -1) {
-            reject(new Error('用户密码错误，请检查配置文件！'))
-          } else {
-            console.log('验证成功')
-            resolve(session)
-          }
-        })
-        .on('error', function (err) {
-          reject(err)
-        })
-      req.write(postContent)
-      req.end()
+    try {
+      authRes = await got.post('https://auth.pconline.com.cn/security-server/auth.do', {
+        form: true,
+        body: postContent
+      })
     } catch (err) {
-      return reject(err)
+      authRes = err
+    }
+
+    const {
+      location
+    } = authRes.headers
+
+    if (!location) {
+      reject(new Error('账号不正常，请确认账号能否正常使用！'))
+      return false
+    }
+
+    const {
+      query
+    } = url.parse(location)
+    const {
+      st
+    } = querystring.parse(query)
+    if (parseInt(st) === -1) {
+      reject(new Error('用户密码错误，请检查配置文件！'))
+    } else {
+      session = await getSession(location)
+      uploadClient = uploadClient.extend({
+        headers: {
+          cookie: session
+        }
+      })
+      console.log('验证成功')
+      resolve(session)
     }
   })
 }
 
 exports.upload = function (file, opts, session) {
   return new Promise(async function (resolve, reject) {
+    if (!isLeagelSite(CONFIG.site)) {
+      return reject(new Error('Unable to get site, please use init first!'))
+    }
+
     Object.assign(CONFIG, opts)
 
     let {
       targetPath
     } = opts
 
-    if (!isLeagelSite(CONFIG.site)) {
-      return reject(new Error('Illegal site!'))
+    if (!session) {
+      await verifyUser(opts.user)
     }
 
     if (!targetPath) {
@@ -120,66 +123,47 @@ exports.upload = function (file, opts, session) {
 
     targetPath = targetPath.replace(/([^/]$)/, '$1/').replace(/(^[^/])/, '/$1')
 
-    // {zip,jpg,png,gif,js,css,html,mp3,mp4}
-    const setFileObj = function (filePath) {
-      return {
-        value: fs.createReadStream(filePath),
-        options: {
-          filename: path.basename(filePath)
-        }
-      }
-    }
-
-    let _files = []
-    if (Array.isArray(file)) {
-      file.forEach(function (item) {
-        _files.push(setFileObj(item.path))
-      })
-    } else {
-      _files = setFileObj(file)
-    }
-
-    // from request payload
     const formData = {
       dispatch: 'upload',
       colId: '/',
       ulUser: CONFIG.username, // back end record
       siteId: '2',
       colIdNormal: '/',
-      toDir: targetPath,
-      ulfile: _files
+      toDir: targetPath
     }
 
+    const form = new FormData()
+
+    Object.keys(formData).forEach(k => {
+      form.append(k, formData[k])
+    })
+
+    // append files
+    Array.prototype.concat(file).forEach(f => form.append('ulfile', fs.createReadStream(f)))
+
     function upload () {
-      return new Promise(function (resolve, reject) {
-        // docs: https://www.npmjs.com/package/request#multipartform-data-multipart-form-uploads
-        request.post({
-          // target server ==  nginx || resin
-          url: `http://cms.${CONFIG.site}.com.cn:8080/${CONFIG.site}/Upload`,
-          // headers:pconlineHeaders,
-          headers: {
-            cookie: session // session from request.post is invalid when site is pconline
-          },
-          formData: formData
-        },
-        function (err, res, body) {
-          if (err) {
-            return reject(err)
-          }
-          resolve(body)
-        })
+      return new Promise(async function (resolve, reject) {
+        let res
+        try {
+          res = await uploadClient.post('/Upload', {
+            body: form
+          })
+        } catch (err) {
+          res = err
+        }
+        return resolve(res.body)
       })
     }
 
     console.log('开始上传...')
-    // docs: https://www.npmjs.com/package/request#multipartform-data-multipart-form-uploads
+
     try {
       const body = await upload()
       const reg = /<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/g
-      const _arr = body.match(reg)
-      _arr.forEach(function (item) {
+      const uploadedFiles = body.match(reg)
+      uploadedFiles.forEach(function (item) {
         const s = item.match(/>(.*)</)
-        console.log('已上传: ', s[1])
+        console.log('已上传:', s[1])
       })
 
       console.log('已上传全部文件！')
@@ -192,3 +176,5 @@ exports.upload = function (file, opts, session) {
     }
   })
 }
+
+exports.verifyUser = verifyUser

@@ -1,11 +1,15 @@
 {
   "name": "pc-www1",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "main": "index.js",
   "author": "vdorchan <vdorchan@gmail.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vdorchan/pc-www1.git"
+  },
+  "dependencies": {
+    "form-data": "^2.3.3",
+    "got": "^9.3.2"
   }
 }
