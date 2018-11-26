@@ -16,6 +16,8 @@ const isLeagelSite = site => ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse
 
 let uploadClient = got.extend({})
 
+let session
+
 exports.init = function ({ site }) {
   if (!isLeagelSite(site)) {
     throw new Error('Illegal site!')
@@ -81,7 +83,7 @@ const verifyUser = async function (user) {
   if (parseInt(st) === -1) {
     throw new Error('用户密码错误，请检查配置文件！')
   } else {
-    const session = await getSession(location)
+    session = await getSession(location)
     uploadClient = uploadClient.extend({
       headers: {
         cookie: session
@@ -92,7 +94,7 @@ const verifyUser = async function (user) {
   }
 }
 
-exports.upload = async function (file, opts, session) {
+exports.upload = async function (file, opts, _session = session) {
   if (!isLeagelSite(CONFIG.site)) {
     throw new Error('Unable to get site, please use init first!')
   }
@@ -103,7 +105,7 @@ exports.upload = async function (file, opts, session) {
     targetPath
   } = opts
 
-  if (!session) {
+  if (!_session) {
     await verifyUser(opts.user)
   }
 
@@ -158,7 +160,7 @@ exports.upload = async function (file, opts, session) {
       console.log('已上传:', s[1])
     })
 
-    console.log('已上传全部文件！')
+    console.log('已上传上述文件！')
 
     return true
   } catch (err) {
