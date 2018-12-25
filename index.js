@@ -74,12 +74,9 @@ const verifyUser = async function (user) {
     throw new Error(`账号不正常，请确认账号能否正常使用！Response code ${statusCode}`)
   }
 
-  const {
-    query
-  } = url.parse(location)
-  const {
-    st
-  } = querystring.parse(query)
+  const { query } = url.parse(location)
+  const { st } = querystring.parse(query)
+
   if (parseInt(st) === -1) {
     throw new Error('用户密码错误，请检查配置文件！')
   } else {
