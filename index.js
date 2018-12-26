@@ -7,24 +7,49 @@ const iconv = require('iconv-lite')
 
 const legalSite = ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse']
 
-class Www1 {
+module.exports = class Www1 {
   /**
-   * verify the user
+   * @constructor
    * @param {Object} options
    * @param {string} options.username
    * @param {string} options.password
    * @param {string} options.site
    * @param {string} [options.debug]
    */
-  async login (options) {
+  constructor (options) {
     Object.assign(this, options)
 
+    if (!this.username) throw new Error('用户名不能为空')
+    if (!this.password) throw new Error('密码不能为空')
     if (!this.isLegalSite(this.site)) {
       throw new Error(`site 参数不合法，site 必须是 ${legalSite.join(',')} 其中一个！`)
     }
 
     this.uploadBaseUrl = `http://cms.${this.site}.com.cn:8080/${this.site}`
+  }
 
+  async checkLogin () {
+    if (!this.uploadClient) {
+      if (this.username) {
+        await this.login()
+      } else {
+        throw new Error('用户未登录，请先登录！')
+      }
+    }
+  }
+
+  static upload (filePath, targetPath, options) {
+    return new Www1(options).upload(filePath, targetPath)
+  }
+
+  static queryLog (queryOptions, options) {
+    return new Www1(options).queryLog(queryOptions)
+  }
+
+  /**
+   * verify the user
+   */
+  async login () {
     const postContent = {
       app: 'upload_' + this.site,
       return: `${this.uploadBaseUrl}/Security?dispatch=login`,
@@ -65,30 +90,16 @@ class Www1 {
 
   /**
    *  upload files
-   * @param {string|string[]} path
+   * @param {string|string[]} filePath
    * @param {string} targetPath
-   * @param {Object} [options]
-   * @param {string} options.username
-   * @param {string} options.password
-   * @param {string} options.site
-   * @param {string} [options.debug]
    * @return {Promise<string>} uploaded files
    */
-  async upload (path, targetPath, options) {
-    if (!path) {
+  async upload (filePath, targetPath) {
+    if (!filePath) {
       throw new Error('上传文件不能为空！')
     }
-    if (typeof options === 'object' && options.username) {
-      await this.login(options)
-    }
 
-    if (!this.uploadClient) {
-      if (this.username) {
-        await this.login()
-      } else {
-        throw new Error('用户未登录，请先登录！')
-      }
-    }
+    await this.checkLogin()
 
     if (!targetPath) {
       throw new Error('上传路径不能为空!')
@@ -112,7 +123,7 @@ class Www1 {
     })
 
     // append files
-    Array.prototype.concat(path).forEach(f => form.append('ulfile', fs.createReadStream(f)))
+    Array.prototype.concat(filePath).forEach(f => form.append('ulfile', fs.createReadStream(f)))
 
     this.log('开始上传...')
 
@@ -138,11 +149,14 @@ class Www1 {
   /**
    *
    * @param {Object} [options={}]
-   * @param {string} [form=today] ep: 2018-12-25
-   * @param {string} [to=from] ep: 2018-12-25
-   * @param {string} pageNo ep: 2018-12-25
+   * @param {string} [form=today] ex. 2018-12-25
+   * @param {string} [to=from] ex. 2018-12-25
+   * @param {string} pageNo ex. 2018-12-25
+   * @return {Promise<Array>}
    */
-  async query ({ from = new Date().toISOString().replace(/T.+/g, ''), to = from, pageNo = 1 } = {}) {
+  async queryLog ({ from = new Date().toISOString().replace(/T.+/g, ''), to = from, pageNo = 1 } = {}) {
+    await this.checkLogin()
+
     this.log(`正在查询 ${from} 到 ${to} 的上传日志...`)
 
     const formData = {
@@ -259,5 +273,3 @@ class Www1 {
     return tags
   }
 }
-
-module.exports = new Www1()
