@@ -5,9 +5,7 @@ const got = require('got')
 const FormData = require('form-data')
 const iconv = require('iconv-lite')
 
-const legalSite = ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse']
-
-module.exports = class Www1 {
+class Www1 {
   /**
    * @constructor
    * @param {Object} options
@@ -259,7 +257,7 @@ module.exports = class Www1 {
    * @return {boolean}
    */
   isLegalSite (site) {
-    return legalSite.includes(site)
+    return Www1.siteList.includes(site)
   }
 
   _getTagContent (html, tag) {
@@ -273,3 +271,7 @@ module.exports = class Www1 {
     return tags
   }
 }
+
+Www1.siteList = ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse']
+
+module.exports = Www1
