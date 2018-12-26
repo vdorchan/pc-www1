@@ -3,51 +3,228 @@ const url = require('url')
 const querystring = require('querystring')
 const got = require('got')
 const FormData = require('form-data')
+const iconv = require('iconv-lite')
 
-const CONFIG = {
-  site: '',
-  username: '',
-  password: '',
-  recordList: `http://cms.${this.site}.com.cn:8080/${this.site}/Enq`,
-  uploadBaseUrl: ''
-}
+const legalSite = ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse']
 
-const isLeagelSite = site => ['pconline', 'pcauto', 'pclady', 'pcbaby', 'pchouse'].indexOf(site) !== -1
+class Www1 {
+  /**
+   * verify the user
+   * @param {Object} options
+   * @param {string} options.username
+   * @param {string} options.password
+   * @param {string} options.site
+   * @param {string} [options.debug]
+   */
+  async login (options) {
+    Object.assign(this, options)
 
-let uploadClient = got.extend({})
+    if (!this.isLegalSite(this.site)) {
+      throw new Error(`site 参数不合法，site 必须是 ${legalSite.join(',')} 其中一个！`)
+    }
 
-let session
+    this.uploadBaseUrl = `http://cms.${this.site}.com.cn:8080/${this.site}`
 
-exports.init = function ({ site }) {
-  if (!isLeagelSite(site)) {
-    throw new Error('Illegal site!')
-  } else {
-    Object.assign(CONFIG, {
-      site,
-      uploadBaseUrl: `http://cms.${site}.com.cn:8080/${site}`
+    const postContent = {
+      app: 'upload_' + this.site,
+      return: `${this.uploadBaseUrl}/Security?dispatch=login`,
+      username: this.username,
+      password: this.password
+    }
+
+    this.log(`${this.username} 正在登录中...`)
+
+    const { headers: { location }, statusCode } = await got.post('https://auth.pconline.com.cn/security-server/auth.do', {
+      form: true,
+      body: postContent,
+      throwHttpErrors: false
     })
 
-    uploadClient = got.extend({
-      baseUrl: CONFIG.uploadBaseUrl
+    if (!location) {
+      this.log('登录失败')
+      throw new Error(`账号不正常，请确认账号能否正常使用！Response code ${statusCode}`)
+    }
+
+    const { query } = url.parse(location)
+    const { st } = querystring.parse(query)
+
+    if (parseInt(st) === -1) {
+      this.log('登录失败')
+      throw new Error('用户密码错误，请检查配置文件！')
+    } else {
+      const session = await this._getSession(location)
+      this.uploadClient = got.extend({
+        baseUrl: this.uploadBaseUrl,
+        headers: {
+          cookie: session
+        }
+      })
+      this.log('登录成功')
+    }
+  }
+
+  /**
+   *  upload files
+   * @param {string|string[]} path
+   * @param {string} targetPath
+   * @param {Object} [options]
+   * @param {string} options.username
+   * @param {string} options.password
+   * @param {string} options.site
+   * @param {string} [options.debug]
+   * @return {Promise<string>} uploaded files
+   */
+  async upload (path, targetPath, options) {
+    if (!path) {
+      throw new Error('上传文件不能为空！')
+    }
+    if (typeof options === 'object' && options.username) {
+      await this.login(options)
+    }
+
+    if (!this.uploadClient) {
+      if (this.username) {
+        await this.login()
+      } else {
+        throw new Error('用户未登录，请先登录！')
+      }
+    }
+
+    if (!targetPath) {
+      throw new Error('上传路径不能为空!')
+    }
+
+    targetPath = targetPath.replace(/^[/]?(\S+[^/])[/]?$/g, '/$1/')
+
+    const formData = {
+      dispatch: 'upload',
+      colId: '/',
+      ulUser: this.username, // back end record
+      siteId: '2',
+      colIdNormal: '/',
+      toDir: targetPath
+    }
+
+    const form = new FormData()
+
+    Object.keys(formData).forEach(k => {
+      form.append(k, formData[k])
     })
+
+    // append files
+    Array.prototype.concat(path).forEach(f => form.append('ulfile', fs.createReadStream(f)))
+
+    this.log('开始上传...')
+
+    let uploadedFiles = []
+
+    const body = await this._uploadFiles(form)
+
+    try {
+      const reg = /<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/g
+      uploadedFiles = body.match(reg).map(item => {
+        const s = item.match(/>(.*)</)
+        this.log('已上传:', s[1])
+        return s
+      })
+
+      this.log('已上传上述文件！')
+    } catch (error) {
+    }
+
+    return uploadedFiles
   }
-}
 
-const verifyUser = async function (user) {
-  if (!isLeagelSite(CONFIG.site)) {
-    throw new Error('Unable to get site, please use init first!')
+  /**
+   *
+   * @param {Object} [options={}]
+   * @param {string} [form=today] ep: 2018-12-25
+   * @param {string} [to=from] ep: 2018-12-25
+   * @param {string} pageNo ep: 2018-12-25
+   */
+  async query ({ from = new Date().toISOString().replace(/T.+/g, ''), to = from, pageNo = 1 } = {}) {
+    this.log(`正在查询 ${from} 到 ${to} 的上传日志...`)
+
+    const formData = {
+      dispatch: 'searchULLog',
+      ttPage: 0,
+      fileName: '',
+      status: '',
+      siteId: '',
+      col: '',
+      dFrom: from,
+      dTo: to,
+      pageNo
+    }
+
+    const res = await this.uploadClient.post('/Enq', {
+      form: true,
+      body: formData,
+      encoding: null
+    })
+
+    const html = iconv.decode(res.body, 'gbk').replace(/[\n\r\t]/g, '').replace(/.+divGrid/g, '').replace(/<\/table>.+/g, '')
+
+    var trs = this._getTagContent(html, 'tr')
+
+    let uploadedList = []
+    let output = ''
+    trs.forEach(tr => {
+      const tds = this._getTagContent(tr, 'td')
+      if (tds.length && tds[0]) {
+        const username = tds[0]
+        const size = tds[2]
+        const lastModifyTime = tds[3]
+        const uploadTime = tds[4]
+        const status = tds[5]
+        let url = ''
+        try {
+          url = this._getTagContent(tds[1], 'a')[0]
+        } catch (error) {
+        }
+
+        uploadedList.push({ username, url, size, lastModifyTime, uploadTime, status })
+
+        output += `${username} ${uploadTime} ${status} ${url}\n`
+      }
+    })
+
+    this.log('查询结束')
+
+    this.log(output || '当前查询条件下无结果')
+
+    return uploadedList
   }
 
-  Object.assign(CONFIG, user)
-
-  const postContent = {
-    app: 'upload_' + CONFIG.site,
-    return: `${CONFIG.uploadBaseUrl}/Security?dispatch=login`,
-    username: CONFIG.username,
-    password: CONFIG.password
+  /**
+   *
+   * @param {FormData} form
+   */
+  async _uploadFiles (form) {
+    let res
+    try {
+      res = await this.uploadClient.post('/Upload', {
+        body: form
+      })
+    } catch (err) {
+      if (err.statusCode === 302) {
+        res = err
+      } else {
+        throw err
+      }
+    }
+    return res.body
   }
 
-  const getSession = async location => {
+  log (...args) {
+    this.debug && console.log(...args)
+  }
+
+  /**
+   *
+   * @param {string} location
+   */
+  async _getSession (location) {
     let sessionRes
     try {
       sessionRes = await got.post(location)
@@ -62,107 +239,25 @@ const verifyUser = async function (user) {
     return sessionRes.headers['set-cookie'][0].match(/JSESSIONID=\S+;/g)[0].replace(';', '')
   }
 
-  console.log('验证用户...')
-
-  const { headers: { location }, statusCode } = await got.post('https://auth.pconline.com.cn/security-server/auth.do', {
-    form: true,
-    body: postContent,
-    throwHttpErrors: false
-  })
-
-  if (!location) {
-    throw new Error(`账号不正常，请确认账号能否正常使用！Response code ${statusCode}`)
+  /**
+   * verify site is legal
+   * @param {string} site
+   * @return {boolean}
+   */
+  isLegalSite (site) {
+    return legalSite.includes(site)
   }
 
-  const { query } = url.parse(location)
-  const { st } = querystring.parse(query)
+  _getTagContent (html, tag) {
+    const reg = new RegExp(`<${tag}[^>]*>(.+?)</${tag}>`, 'g')
+    let tags = html.match(reg) || []
 
-  if (parseInt(st) === -1) {
-    throw new Error('用户密码错误，请检查配置文件！')
-  } else {
-    session = await getSession(location)
-    uploadClient = uploadClient.extend({
-      headers: {
-        cookie: session
-      }
-    })
-    console.log('验证成功')
-    return session
-  }
-}
-
-exports.upload = async function (file, opts, _session = session) {
-  if (!isLeagelSite(CONFIG.site)) {
-    throw new Error('Unable to get site, please use init first!')
-  }
-
-  Object.assign(CONFIG, opts)
-
-  let {
-    targetPath
-  } = opts
-
-  if (!_session) {
-    await verifyUser(opts.user)
-  }
-
-  if (!targetPath) {
-    throw new Error('Illegal path!')
-  }
-
-  targetPath = targetPath.replace(/([^/]$)/, '$1/').replace(/(^[^/])/, '/$1')
-
-  const formData = {
-    dispatch: 'upload',
-    colId: '/',
-    ulUser: CONFIG.username, // back end record
-    siteId: '2',
-    colIdNormal: '/',
-    toDir: targetPath
-  }
-
-  const form = new FormData()
-
-  Object.keys(formData).forEach(k => {
-    form.append(k, formData[k])
-  })
-
-  // append files
-  Array.prototype.concat(file).forEach(f => form.append('ulfile', fs.createReadStream(f)))
-
-  async function upload () {
-    let res
-    try {
-      res = await uploadClient.post('/Upload', {
-        body: form
-      })
-    } catch (err) {
-      if (err.statusCode === 302) {
-        res = err
-      } else {
-        throw err
-      }
+    if (tags.length) {
+      tags = tags.map(t => t.replace(reg, '$1'))
     }
-    return res.body
-  }
 
-  console.log('开始上传...')
-
-  try {
-    const body = await upload()
-    const reg = /<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/g
-    const uploadedFiles = body.match(reg)
-    uploadedFiles.forEach(function (item) {
-      const s = item.match(/>(.*)</)
-      console.log('已上传:', s[1])
-    })
-
-    console.log('已上传上述文件！')
-
-    return true
-  } catch (err) {
-    throw err
+    return tags
   }
 }
 
-exports.verifyUser = verifyUser
+module.exports = new Www1()
