@@ -20,7 +20,7 @@ class Www1 {
     if (!this.username) throw new Error('用户名不能为空')
     if (!this.password) throw new Error('密码不能为空')
     if (!this.isLegalSite(this.site)) {
-      throw new Error(`site 参数不合法，site 必须是 ${legalSite.join(',')} 其中一个！`)
+      throw new Error(`site 参数不合法，site 必须是 ${Www1.siteList.join(',')} 其中一个！`)
     }
 
     this.uploadBaseUrl = `http://cms.${this.site}.com.cn:8080/${this.site}`
@@ -36,6 +36,9 @@ class Www1 {
     }
   }
 
+  static login (options) {
+    return new Www1(options).login()
+  }
   static upload (filePath, targetPath, options) {
     return new Www1(options).upload(filePath, targetPath)
   }
@@ -134,7 +137,7 @@ class Www1 {
       uploadedFiles = body.match(reg).map(item => {
         const s = item.match(/>(.*)</)
         this.log('已上传:', s[1])
-        return s
+        return s[1]
       })
 
       this.log('已上传上述文件！')
